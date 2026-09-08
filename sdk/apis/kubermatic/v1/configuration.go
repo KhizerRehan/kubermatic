@@ -332,6 +332,11 @@ type KubermaticUserClusterConfiguration struct {
 	// AdmissionPlugins configures global admission plugin settings for all user clusters.
 	// +optional
 	AdmissionPlugins *AdmissionPluginsConfiguration `json:"admissionPlugins,omitempty"`
+	// KeyConfiguration selects the algorithm and size of the key material KKP generates
+	// for user clusters. The value is stamped into each Cluster when it is created; it
+	// therefore only affects clusters created after it is changed, never existing ones.
+	// +optional
+	KeyConfiguration *KeyConfiguration `json:"keyConfiguration,omitempty"`
 }
 
 // KubermaticUserClusterMonitoringConfiguration can be used to fine-tune to in-cluster Prometheus.
