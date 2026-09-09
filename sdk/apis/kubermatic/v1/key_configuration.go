@@ -82,6 +82,13 @@ type KeySpec struct {
 // ClusterSpec.KeyConfiguration when a cluster is created, and is immutable from
 // then on. Reconcilers only ever read the copy stored on the Cluster, so
 // changing the global default never affects clusters that already exist.
+//
+// There is deliberately no way to change this for a cluster that already exists.
+// Rotating key material in place means re-issuing every leaf certificate, every
+// internal kubeconfig, every kubelet client certificate and every webhook CA
+// bundle while keeping the control plane reachable, which KKP does not implement
+// yet. Recreating the cluster is currently the only way to change its key
+// material.
 type KeyConfiguration struct {
 	// ServiceAccountKey configures the user-cluster service-account token
 	// signing key. This key is consumed by systems outside the cluster when

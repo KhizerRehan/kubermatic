@@ -293,6 +293,11 @@ type ClusterSpec struct {
 	// cluster is created and is immutable afterwards, so that changing the global default
 	// never alters the key material of clusters that already exist. An empty value means
 	// RSA-2048, which is what KKP generated before this field was introduced.
+	//
+	// The field can only be set while the cluster is being created. Clusters that
+	// already exist keep the key material they were created with; rotating it is not
+	// supported yet, so moving a cluster to a different algorithm or size requires
+	// recreating it.
 	KeyConfiguration *KeyConfiguration `json:"keyConfiguration,omitempty"`
 }
 

@@ -101,8 +101,15 @@ func validateKeySpec(spec *kubermaticv1.KeySpec, fldPath *field.Path) field.Erro
 // drift into a chain whose leaves use a different algorithm than the CA they
 // were issued for, without anyone acting on it and without an error anywhere.
 //
-// This lives in its own function so that a future key rotation feature can
-// deliberately allow the change for the one update that starts the rotation.
+// Changing the key material of an existing cluster therefore requires an
+// explicit rotation, which KKP does not implement yet: rotating a CA means
+// re-issuing every leaf certificate, every internal kubeconfig, every kubelet
+// client certificate and every webhook CA bundle, in an order that keeps the
+// control plane reachable throughout. Until that exists, the only way to move a
+// cluster to different key material is to recreate it.
+//
+// This lives in its own function so that a rotation feature can deliberately
+// allow the change for the one update that starts the rotation.
 func ValidateKeyConfigurationUpdate(oldConfig, newConfig *kubermaticv1.KeyConfiguration, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
@@ -114,7 +121,7 @@ func ValidateKeyConfigurationUpdate(oldConfig, newConfig *kubermaticv1.KeyConfig
 	// cannot be changed retroactively, so accepting a value now would only apply
 	// to whatever is generated next -- the mixed chain described above.
 	if newConfig != nil {
-		allErrs = append(allErrs, field.Forbidden(fldPath, "key configuration cannot be added to an existing cluster"))
+		allErrs = append(allErrs, field.Forbidden(fldPath, "key configuration cannot be added to an existing cluster; its key material was generated as RSA-2048 and rotating it is not supported yet, so the algorithm can only be chosen when a cluster is created"))
 	}
 
 	return allErrs
