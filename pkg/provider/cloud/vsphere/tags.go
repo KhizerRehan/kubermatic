@@ -18,6 +18,7 @@ package vsphere
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	vapitags "github.com/vmware/govmomi/vapi/tags"
@@ -52,16 +53,23 @@ func reconcileTags(ctx context.Context, restSession *RESTSession, cluster *kuber
 
 func syncCreatedClusterTags(ctx context.Context, restSession *RESTSession, cluster *kubermaticv1.Cluster) error {
 	tagManager := vapitags.NewManager(restSession.Client)
-	categoryTags, err := tagManager.GetTagsForCategory(ctx, cluster.Spec.Cloud.VSphere.Tags.CategoryID)
-	if err != nil {
-		return fmt.Errorf("failed to get tag category %s: %w", cluster.Spec.Cloud.VSphere.Tags.CategoryID, err)
-	}
 
-	for _, vsphereTag := range cluster.Spec.Cloud.VSphere.Tags.Tags {
-		if filterTag(categoryTags, vsphereTag) == "" {
-			_, err := createTag(ctx, restSession, cluster.Spec.Cloud.VSphere.Tags.CategoryID, vsphereTag)
-			if err != nil {
-				return fmt.Errorf("failed to create tag %s against category %s: %w", vsphereTag, cluster.Spec.Cloud.VSphere.Tags.CategoryID, err)
+	for _, group := range cluster.Spec.Cloud.VSphere.AllTags() {
+		if group.CategoryID == "" {
+			return errors.New("tag group has no category ID")
+		}
+
+		categoryTags, err := tagManager.GetTagsForCategory(ctx, group.CategoryID)
+		if err != nil {
+			return fmt.Errorf("failed to get tag category %s: %w", group.CategoryID, err)
+		}
+
+		for _, vsphereTag := range group.Tags {
+			if filterTag(categoryTags, vsphereTag) == "" {
+				_, err := createTag(ctx, restSession, group.CategoryID, vsphereTag)
+				if err != nil {
+					return fmt.Errorf("failed to create tag %s against category %s: %w", vsphereTag, group.CategoryID, err)
+				}
 			}
 		}
 	}
@@ -71,32 +79,37 @@ func syncCreatedClusterTags(ctx context.Context, restSession *RESTSession, clust
 
 func syncDeletedClusterTags(ctx context.Context, restSession *RESTSession, cluster *kubermaticv1.Cluster) error {
 	tagManager := vapitags.NewManager(restSession.Client)
-	categoryTags, err := tagManager.GetTagsForCategory(ctx, cluster.Spec.Cloud.VSphere.Tags.CategoryID)
-	if err != nil {
-		return fmt.Errorf("failed to get tag %w", err)
-	}
 
-	clusterTags := sets.NewString(cluster.Spec.Cloud.VSphere.Tags.Tags...)
-	for _, vsphereTag := range categoryTags {
-		if _, ok := clusterTags[vsphereTag.Name]; ok {
-			if cluster.DeletionTimestamp == nil {
+	for _, group := range cluster.Spec.Cloud.VSphere.AllTags() {
+		if group.CategoryID == "" {
+			return errors.New("tag group has no category ID")
+		}
+
+		categoryTags, err := tagManager.GetTagsForCategory(ctx, group.CategoryID)
+		if err != nil {
+			return fmt.Errorf("failed to get tags for category %s: %w", group.CategoryID, err)
+		}
+
+		clusterTags := sets.New(group.Tags...)
+		for _, vsphereTag := range categoryTags {
+			if clusterTags.Has(vsphereTag.Name) && cluster.DeletionTimestamp == nil {
 				continue
 			}
-		}
 
-		// Fetch all objects attached to the tag.
-		attachedObjs, err := tagManager.ListAttachedObjects(ctx, vsphereTag.ID)
-		if err != nil {
-			return fmt.Errorf("failed to list attached objects for the given tag %s: %w", vsphereTag.Name, err)
-		}
+			// Fetch all objects attached to the tag.
+			attachedObjs, err := tagManager.ListAttachedObjects(ctx, vsphereTag.ID)
+			if err != nil {
+				return fmt.Errorf("failed to list attached objects for the given tag %s: %w", vsphereTag.Name, err)
+			}
 
-		// if there are still objects attached to the tag, we can't delete it.
-		if len(attachedObjs) > 0 {
-			continue
-		}
+			// if there are still objects attached to the tag, we can't delete it.
+			if len(attachedObjs) > 0 {
+				continue
+			}
 
-		if err := tagManager.DeleteTag(ctx, &vsphereTag); err != nil {
-			return fmt.Errorf("failed to delete tag %s: %w", vsphereTag.Name, err)
+			if err := tagManager.DeleteTag(ctx, &vsphereTag); err != nil {
+				return fmt.Errorf("failed to delete tag %s: %w", vsphereTag.Name, err)
+			}
 		}
 	}
 

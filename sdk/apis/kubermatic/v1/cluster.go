@@ -1449,7 +1449,29 @@ type VSphereCloudSpec struct {
 	// Tags represents the tags that are attached or created on the cluster level, that are then propagated down to the
 	// MachineDeployments. In order to attach tags on MachineDeployment, users must create the tag on a cluster level first
 	// then attach that tag on the MachineDeployment.
+	// This is the primary tag category of the cluster: MachineDeployment tags without an explicit categoryID default to it.
 	Tags *VSphereTag `json:"tags,omitempty"`
+
+	// AdditionalTags represents further tag groups, each against its own tag category, that are created on the cluster
+	// level and attached to the cluster folder in the same way as Tags. Every group must reference a category that is
+	// distinct from Tags and from the other groups.
+	// +optional
+	AdditionalTags []VSphereTag `json:"additionalTags,omitempty"`
+}
+
+// AllTags returns the primary tag group followed by every additional tag group. Groups without a category ID are
+// returned as is; callers that need a resolved category must run DefaultCloudSpec first.
+func (s *VSphereCloudSpec) AllTags() []VSphereTag {
+	if s == nil {
+		return nil
+	}
+
+	all := make([]VSphereTag, 0, len(s.AdditionalTags)+1)
+	if s.Tags != nil {
+		all = append(all, *s.Tags)
+	}
+
+	return append(all, s.AdditionalTags...)
 }
 
 // VSphereTag represents the tags that are attached or created on the cluster level, that are then propagated down to the

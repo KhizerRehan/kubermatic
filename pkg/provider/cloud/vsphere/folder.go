@@ -29,6 +29,8 @@ import (
 	kubermaticv1 "k8c.io/kubermatic/sdk/v2/apis/kubermatic/v1"
 	kuberneteshelper "k8c.io/kubermatic/v2/pkg/kubernetes"
 	"k8c.io/kubermatic/v2/pkg/provider"
+
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // Folder represents a vsphere folder.
@@ -39,7 +41,7 @@ type Folder struct {
 // reconcileFolder reconciles a vSphere folder.
 func reconcileFolder(ctx context.Context, s *Session, restSession *RESTSession, folderPath string,
 	cluster *kubermaticv1.Cluster, update provider.ClusterUpdater) (*kubermaticv1.Cluster, error) {
-	err := ensureVMFolder(ctx, s, restSession, folderPath, cluster.Spec.Cloud.VSphere.Tags)
+	err := ensureVMFolder(ctx, s, restSession, folderPath, cluster.Spec.Cloud.VSphere.AllTags())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create the VM folder %q: %w", folderPath, err)
 	}
@@ -58,7 +60,7 @@ func reconcileFolder(ctx context.Context, s *Session, restSession *RESTSession, 
 }
 
 // ensureVMFolder creates the specified vm folder if it does not exist yet.
-func ensureVMFolder(ctx context.Context, session *Session, restSession *RESTSession, fullPath string, tags *kubermaticv1.VSphereTag) error {
+func ensureVMFolder(ctx context.Context, session *Session, restSession *RESTSession, fullPath string, tags []kubermaticv1.VSphereTag) error {
 	rootPath, newFolder := path.Split(fullPath)
 
 	rootFolder, err := session.Finder.Folder(ctx, rootPath)
@@ -132,8 +134,8 @@ func GetVMFolders(ctx context.Context, dc *kubermaticv1.DatacenterSpecVSphere, u
 }
 
 func ensureFolderTags(ctx context.Context, session *Session, restSession *RESTSession, fullPath string,
-	desiredTags *kubermaticv1.VSphereTag, folder *object.Folder) error {
-	if desiredTags == nil {
+	desiredTags []kubermaticv1.VSphereTag, folder *object.Folder) error {
+	if len(desiredTags) == 0 {
 		return nil
 	}
 
@@ -144,43 +146,47 @@ func ensureFolderTags(ctx context.Context, session *Session, restSession *RESTSe
 		return fmt.Errorf("failed to retrieve tags for folder %q: %w", fullPath, err)
 	}
 
-	var tagsToDelete, tagsToCreate []string
-	// Check if the folder has all tags that are specified in the cluster spec.
-	for _, tag := range desiredTags.Tags {
-		tagID, err := determineTagID(ctx, tagManager, tag, desiredTags.CategoryID)
-		if err != nil {
-			return err
+	// Desired tag names per category. Only categories present here are managed; tags from other categories are ignored.
+	desiredByCategory := make(map[string]sets.Set[string], len(desiredTags))
+	// Iterate in spec order so tag lookups and attachments are deterministic.
+	categoryOrder := make([]string, 0, len(desiredTags))
+	for _, group := range desiredTags {
+		if _, exists := desiredByCategory[group.CategoryID]; exists {
+			continue
 		}
-
-		// Check if the tag is already attached to the folder.
-		var found bool
-		for _, folderTag := range folderTags {
-			if folderTag.CategoryID == desiredTags.CategoryID && folderTag.ID == tagID {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			tagsToCreate = append(tagsToCreate, tagID)
-		}
+		desiredByCategory[group.CategoryID] = sets.New(group.Tags...)
+		categoryOrder = append(categoryOrder, group.CategoryID)
 	}
 
-	// Check if the folder has tags that are not specified in the cluster spec.
-	for _, folderTag := range folderTags {
-		// We only care about tags that are in the same category as the tags specified in the cluster spec. Tags from other categories are ignored.
-		if folderTag.CategoryID == desiredTags.CategoryID {
+	var tagsToDelete, tagsToCreate []string
+	// Check if the folder has all tags that are specified in the cluster spec.
+	for _, categoryID := range categoryOrder {
+		for _, tag := range sets.List(desiredByCategory[categoryID]) {
+			tagID, err := determineTagID(ctx, tagManager, tag, categoryID)
+			if err != nil {
+				return err
+			}
+
+			// Check if the tag is already attached to the folder.
 			var found bool
-			for _, tag := range desiredTags.Tags {
-				if tag == folderTag.Name {
+			for _, folderTag := range folderTags {
+				if folderTag.CategoryID == categoryID && folderTag.ID == tagID {
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				tagsToDelete = append(tagsToDelete, folderTag.ID)
+				tagsToCreate = append(tagsToCreate, tagID)
 			}
+		}
+	}
+
+	// Check if the folder has tags in a managed category that are not specified in the cluster spec.
+	for _, folderTag := range folderTags {
+		names, managed := desiredByCategory[folderTag.CategoryID]
+		if managed && !names.Has(folderTag.Name) {
+			tagsToDelete = append(tagsToDelete, folderTag.ID)
 		}
 	}
 	// At this point we have lists of tags that need to be attached and detached from the folder.
@@ -197,7 +203,7 @@ func ensureFolderTags(ctx context.Context, session *Session, restSession *RESTSe
 			return fmt.Errorf("failed to detach tag %q from folder: %w", tagID, err)
 		}
 	}
-	return err
+	return nil
 }
 
 func determineTagID(ctx context.Context, tagManager *tags.Manager, tag, tagCategoryID string) (string, error) {
